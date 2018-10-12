@@ -73,7 +73,7 @@ add_executable(VulkanHppGenerator
   ${TINYXML2_HEADERS}
 )
 
-set_property(TARGET VulkanHppGenerator PROPERTY CXX_STANDARD 11)
+set_property(TARGET VulkanHppGenerator PROPERTY CXX_STANDARD 14)
 
 target_include_directories(VulkanHppGenerator PRIVATE "${CMAKE_SOURCE_DIR}/tinyxml2")
 

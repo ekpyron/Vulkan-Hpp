@@ -4085,157 +4085,12 @@ void VulkanHppGenerator::writeResultEnum(std::ostream & os)
   m_dependencies.erase(it);
 }
 
-void VulkanHppGenerator::writeStructConstructor(std::ostream & os, std::string const& name, StructData const& structData, std::map<std::string, std::string> const& defaultValues)
-{
-  // the constructor with all the elements as arguments, with defaults
-  std::string ctorOpening = "    " + name + "( ";
-  size_t indentSize = ctorOpening.size();
-  os << ctorOpening;
-
-  bool listedArgument = false;
-  for (size_t i = 0; i < structData.members.size(); i++)
-  {
-    listedArgument = writeStructConstructorArgument(os, listedArgument, indentSize, structData.members[i], defaultValues);
-  }
-  os << " )" << std::endl;
-
-  // copy over the simple arguments
-  bool firstArgument = true;
-  for (size_t i = 0; i < structData.members.size(); i++)
-  {
-    // skip members 'pNext' and 'sType' are directly set by initializers
-    if ((structData.members[i].name != "pNext") && (structData.members[i].name != "sType") && (structData.members[i].arraySize.empty()))
-    {
-      // here, we can only handle non-array arguments
-      std::string templateString = "      ${sep} ${member}( ${value} )\n";
-      std::string sep = firstArgument ? ":" : ",";
-      std::string member = structData.members[i].name;
-      std::string value = structData.members[i].name + "_";   // the elements are initialized by the corresponding argument (with trailing '_', as mentioned above)
-
-      os << replaceWithMap(templateString, { { "sep", sep },{ "member", member },{ "value", value } });
-      firstArgument = false;
-    }
-  }
-
-  // the body of the constructor, copying over data from argument list into wrapped struct
-  os << "    {" << std::endl;
-  for (size_t i = 0; i < structData.members.size(); i++)
-  {
-    if (!structData.members[i].arraySize.empty())
-    {
-      // here we can handle the arrays, copying over from argument (with trailing '_') to member
-      // size is arraySize times sizeof type
-      std::string member = structData.members[i].name;
-      std::string arraySize = structData.members[i].arraySize;
-      std::string type = structData.members[i].type;
-      os << replaceWithMap("      memcpy( &${member}, ${member}_.data(), ${arraySize} * sizeof( ${type} ) );\n",
-      { { "member", member },{ "arraySize", arraySize },{ "type", type } });
-    }
-  }
-  os << "    }\n\n";
-
-  if (!structData.subStruct.empty())
-  {
-    auto const& subStruct = m_structs.find(structData.subStruct);
-    assert(subStruct != m_structs.end());
-
-    std::string subStructArgumentName = startLowerCase(strip(subStruct->first, "vk"));
-    ctorOpening = "    explicit " + name + "( ";
-    indentSize = ctorOpening.size();
-
-    os << ctorOpening << subStruct->first << " const& " << subStructArgumentName;
-
-    for (size_t i = subStruct->second.members.size(); i < structData.members.size(); i++)
-    {
-      writeStructConstructorArgument(os, true, indentSize, structData.members[i], defaultValues);
-    }
-    os << " )" << std::endl;
-
-    firstArgument = true;
-    std::string templateString = "      ${sep} ${member}( ${value} )\n";
-    for (size_t i = 0; i < subStruct->second.members.size(); i++)
-    {
-      assert(structData.members[i].arraySize.empty());
-      std::string sep = firstArgument ? ":" : ",";
-      std::string member = structData.members[i].name;
-      std::string value = subStructArgumentName + "." + subStruct->second.members[i].name;
-
-      os << replaceWithMap(templateString, { { "sep", sep },{ "member", member },{ "value", value } });
-      firstArgument = false;
-    }
-    for (size_t i = subStruct->second.members.size(); i < structData.members.size(); i++)
-    {
-      assert(structData.members[i].arraySize.empty());
-      std::string member = structData.members[i].name;
-      std::string value = structData.members[i].name + "_";   // the elements are initialized by the corresponding argument (with trailing '_', as mentioned above)
-
-      os << replaceWithMap(templateString, { { "sep", "," },{ "member", member },{ "value", value } });
-    }
-    os << "    {}" << std::endl << std::endl;
-  }
-
-  std::string templateString =
-    R"(    ${name}( Vk${name} const & rhs )
-    {
-      memcpy( this, &rhs, sizeof( ${name} ) );
-    }
-
-    ${name}& operator=( Vk${name} const & rhs )
-    {
-      memcpy( this, &rhs, sizeof( ${name} ) );
-      return *this;
-    }
-)";
-
-  os << replaceWithMap(templateString, { { "name", name } });
-}
-
 void VulkanHppGenerator::writeIndentation(std::ostream & os, size_t indentLength)
 {
   for(size_t i = 0; i < indentLength; i++)
   {
     os << " ";
   }
-}
-
-bool VulkanHppGenerator::writeStructConstructorArgument(std::ostream & os, bool listedArgument, size_t indentLength, MemberData const& memberData, std::map<std::string, std::string> const& defaultValues)
-{
-  if (listedArgument)
-  {
-    os << ",\n";
-    writeIndentation(os, indentLength);
-  }
-
-  // skip members 'pNext' and 'sType', as they are never explicitly set
-  if ((memberData.name != "pNext") && (memberData.name != "sType"))
-  {
-    // find a default value for the given pure type
-    std::map<std::string, std::string>::const_iterator defaultIt = defaultValues.find(memberData.pureType);
-    assert(defaultIt != defaultValues.end());
-
-    if (memberData.arraySize.empty())
-    {
-      // the arguments name get a trailing '_', to distinguish them from the actual struct members
-      // pointer arguments get a nullptr as default
-      os << memberData.type << " " << memberData.name << "_ = " << (memberData.type.back() == '*' ? "nullptr" : defaultIt->second);
-    }
-    else
-    {
-      // array members are provided as const reference to a std::array
-      // the arguments name get a trailing '_', to distinguish them from the actual struct members
-      // list as many default values as there are elements in the array
-      os << "std::array<" << memberData.type << "," << memberData.arraySize << "> const& " << memberData.name << "_ = { { " << defaultIt->second;
-      size_t n = atoi(memberData.arraySize.c_str());
-      assert(0 < n);
-      for (size_t j = 1; j < n; j++)
-      {
-        os << ", " << defaultIt->second;
-      }
-      os << " } }";
-    }
-    listedArgument = true;
-  }
-  return listedArgument;
 }
 
 void VulkanHppGenerator::writeStructSetter(std::ostream & os, std::string const& structureName, MemberData const& memberData)
@@ -4734,12 +4589,8 @@ void VulkanHppGenerator::writeTypeStruct(std::ostream & os, DependencyData const
   os << "  struct " << dependencyData.name << std::endl
     << "  {" << std::endl;
 
-  // only structs that are not returnedOnly get a constructor!
-  if (!it->second.returnedOnly)
-  {
-    writeStructConstructor(os, dependencyData.name, it->second, defaultValues);
-  }
-
+  /*
+   ALSO DISABLE SETTERS - ARGUABLY, WE MIGHT WANT TO KEEP THEM.
   // create the setters
   if (!it->second.returnedOnly)
   {
@@ -4748,6 +4599,7 @@ void VulkanHppGenerator::writeTypeStruct(std::ostream & os, DependencyData const
       writeStructSetter(os, dependencyData.name, it->second.members[i]);
     }
   }
+   */
 
   // the implicit cast-operators to the native type
   os << "    operator Vk" << dependencyData.name << " const&() const" << std::endl
@@ -4775,14 +4627,7 @@ void VulkanHppGenerator::writeTypeStruct(std::ostream & os, DependencyData const
       {
         os << std::endl << "          && ";
       }
-      if (!it->second.members[i].arraySize.empty())
-      {
-        os << "( memcmp( " << it->second.members[i].name << ", rhs." << it->second.members[i].name << ", " << it->second.members[i].arraySize << " * sizeof( " << it->second.members[i].type << " ) ) == 0 )";
-      }
-      else
-      {
-        os << "( " << it->second.members[i].name << " == rhs." << it->second.members[i].name << " )";
-      }
+      os << "( " << it->second.members[i].name << " == rhs." << it->second.members[i].name << " )";
     }
     os << ";" << std::endl
       << "    }" << std::endl
@@ -4805,10 +4650,7 @@ void VulkanHppGenerator::writeTypeStruct(std::ostream & os, DependencyData const
         assert(!it->second.members[i].values.empty());
         auto nameIt = m_nameMap.find(it->second.members[i].values);
         assert(nameIt != m_nameMap.end());
-        os << "  private:" << std::endl
-          << "    StructureType sType = " << nameIt->second << ";" << std::endl
-          << std::endl
-          << "  public:" << std::endl;
+        os << "    StructureType sType = " << nameIt->second << ";" << std::endl;
       }
       else
       {
@@ -4817,21 +4659,55 @@ void VulkanHppGenerator::writeTypeStruct(std::ostream & os, DependencyData const
     }
     else
     {
-      os << "    " << it->second.members[i].type << " " << it->second.members[i].name;
       if (it->second.members[i].name == "pNext")
       {
-        os << " = nullptr";
+          os << "    " << it->second.members[i].type << " " << it->second.members[i].name << " = nullptr";
       }
-      else if (!it->second.members[i].arraySize.empty())
-      {
-        os << "[" << it->second.members[i].arraySize << "]";
+      else {
+          const auto &memberData = it->second.members[i];
+          if (!memberData.arraySize.empty())
+          {
+              os << "    std::array<" << it->second.members[i].type << ", " << it->second.members[i].arraySize << "> " << it->second.members[i].name;
+          }
+          else {
+              os << "    " << it->second.members[i].type << " " << it->second.members[i].name;
+          }
+          os << " = ";
+
+
+          // find a default value for the given pure type
+          std::map<std::string, std::string>::const_iterator defaultIt = defaultValues.find(memberData.pureType);
+          assert(defaultIt != defaultValues.end());
+
+          if (memberData.arraySize.empty())
+          {
+              os << (memberData.type.back() == '*' ? "nullptr" : defaultIt->second);
+          }
+          else
+          {
+              // array members are provided as const reference to a std::array
+              // list as many default values as there are elements in the array
+              os << "{ { " << defaultIt->second;
+              size_t n = atoi(memberData.arraySize.c_str());
+              for (size_t j = 1; j < n; j++)
+              {
+                  os << ", " << defaultIt->second;
+              }
+              os << " } }";
+          }
       }
       os << ";" << std::endl;
     }
   }
   os << "  };" << std::endl
     << "  static_assert( sizeof( " << dependencyData.name << " ) == sizeof( Vk" << dependencyData.name << " ), \"struct and wrapper have different size!\" );" << std::endl;
-
+    // the member variables
+    for (size_t i = 0; i < it->second.members.size(); i++) {
+        if (it->second.members[i].name != "sType") {
+            os << "  static_assert( offsetof( " << dependencyData.name << ", " << it->second.members[i].name << " ) == offsetof( Vk" << dependencyData.name
+               << ", " << it->second.members[i].name << " ), \"struct member and wrapper member have different offset!\" );" << std::endl;
+        }
+    }
   if (!it->second.alias.empty())
   {
     os << std::endl
